@@ -1,0 +1,64 @@
+# Put this file in your repo at: .github/workflows/ncdmv.yml
+name: NCDMV watch
+
+on:
+  schedule:
+    - cron: "*/10 11-22 * * 1-5"   # every 10 min, Mon-Fri, ~7am-6pm Eastern (cron is UTC)
+  workflow_dispatch:                # lets you run it manually from the Actions tab
+    inputs:
+      debug:
+        description: "Save screenshots/HTML for troubleshooting"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ncdmv
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      STATE_FILE: state/seen_slots.json
+      DEBUG_DIR: debug
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Restore alert history (avoids repeat alerts for the same slot)
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: ncdmv-state-${{ github.run_id }}
+          restore-keys: ncdmv-state-
+
+      - name: Install
+        run: |
+          mkdir -p state
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Scan skiptheline
+        run: python ncdmv_watch.py --once ${{ inputs.debug && '--debug' || '' }}
+
+      - name: Save alert history
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: ncdmv-state-${{ github.run_id }}
+
+      - name: Upload debug files
+        if: always() && inputs.debug
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug
+          path: debug
+          if-no-files-found: ignore
